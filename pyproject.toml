@@ -1,0 +1,50 @@
+[project]
+name = "goto-cp312"
+version = "0.1.0"
+description = "A simple realization for enabling \"goto\" support for CPython 3.12"
+authors = [
+    { name = "Dragon1573", email = "49941141+Dragon1573@users.noreply.github.com" },
+]
+dependencies = []
+requires-python = "==3.12.*"
+license = { text = "MIT" }
+
+[build-system]
+requires = ["pdm-backend"]
+build-backend = "pdm.backend"
+
+
+[tool.pdm]
+distribution = true
+build-options = [
+    "--python-tag",
+    "cp312",
+    "-py-limited-api",
+    "cp312",
+    "-plat-name",
+    "win_amd64",
+]
+
+[tool.pdm.scripts]
+post_script = "echo"
+check.cmd = "python -m mypy src/ tests/"
+check.help = "Static type checking using mypy."
+ci.composite = ["sort", "format", "lint", "check", "tests"]
+ci.help = "Run full CI/CD life cycle. Aim for GitHub Workflows."
+format.cmd = "python -m black -l 120 src/ tests/"
+format.help = "Format all source codes using black."
+sort.cmd = "python -m isort src/ tests/"
+sort.help = "Sort imports using isort."
+lint.cmd = "python -m flake8 --verbose --config .flake8 src/ tests/"
+lint.help = "Lint all source codes using flake8."
+tests.cmd = "python -m pytest -v -r a --color=yes"
+tests.help = "Run unittests with pytest."
+
+[tool.pdm.dev-dependencies]
+dev = [
+    "pytest-check>=2.3.1",
+    "isort>=5.13.2",
+    "mypy>=1.8.0",
+    "flake8>=7.0.0",
+    "black>=24.2.0",
+]
