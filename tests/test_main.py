@@ -81,19 +81,19 @@ def test_04(capsys: CaptureFixture[str]):
         assert out == "0\n1\n2\n3\n4\n5\nForce jump success!\n"
 
 
-# TODO: Need to investigate
-@mark.skip
 def test_05(capsys: CaptureFixture[str]):
     @with_goto
     def func():
-        LABEL.label_05
         k = 0
+        LABEL.label_05
         if k > 5:
+            print("Force jump success!")
             return
+        print(k)
+        k += 1
         GOTO.label_05
 
-    # func()
-    dis(func)
+    func()
     out, _ = capsys.readouterr()
     with check:
         assert out == "0\n1\n2\n3\n4\n5\nForce jump success!\n"

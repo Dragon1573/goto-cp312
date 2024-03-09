@@ -5,7 +5,15 @@ from typing import Callable
 
 from opcode import opname
 
-from ._constants import _COMMAND_TYPE, LOAD_ATTR, LOAD_GLOBAL_GOTO, LOAD_GLOBAL_LABEL, POP_TOP, HackingError, _JumpPair
+from ._constants import (
+    _COMMAND_TYPE,
+    LOAD_ATTR,
+    LOAD_GLOBAL_GOTO,
+    LOAD_GLOBAL_LABEL,
+    POP_TOP,
+    HackingError,
+    _JumpPair,
+)
 
 
 def with_goto(func: Callable) -> Callable:
@@ -18,68 +26,77 @@ def with_goto(func: Callable) -> Callable:
     Returns:
         _T: Type of already wrapped function
     """
-    # 跳转表
     jump_table: dict[str, _JumpPair] = {}
+    hack_table: dict[str, _JumpPair] = {}
 
-    # 获取原始函数的字节码
+    # Get bytecode of the raw function
     flag = _COMMAND_TYPE.NORMAL
     c = func.__code__
     byte_array = bytearray(c.co_code)
 
-    # 获取原始函数的可读字节码
+    # Get readable commands of the raw function
     with StringIO() as fp:
         dis(c, file=fp)
         fp.seek(0)
 
-        current_jump_start, current_label = 0, ""
+        current_jump_start, current_jump_label = 0, ""
+        current_hack_start, current_hack_label = 0, ""
         for line in fp.readlines():
+            # Iterate over commands
             if line == "\n":
-                # 可视化字节码是空行，这行直接跳过
                 continue
-            # 遍历字节码
             if flag is _COMMAND_TYPE.NORMAL:
                 if m := LOAD_GLOBAL_GOTO.findall(line):
-                    # 遇到 GOTO 标记，下一行就是标签，但要从此处起跳
+                    # We meet a `GOTO` tag, and the next command contains our label.
+                    # We should jump from here.
                     flag = _COMMAND_TYPE.FROM
                     current_jump_start = int(m[0])
+                    # We should leave at lease 2 bytes for replacing OP_CODE to `JUMP_???WARD`,
+                    # hack following bytes to `NOP`.
+                    current_hack_start = current_jump_start + 2
                 elif m := LOAD_GLOBAL_LABEL.findall(line):
-                    # 遇到 LABEL 标记，下一行是标签
+                    # We meet a `LABEL` tag, and the next command contains our label.
                     flag = _COMMAND_TYPE.TO
-                    byte_array[int(m[0])] = opname.index("NOP")
-                    byte_array[int(m[0]) + 1] = 0
-                # 其他场景则保留原始字节码
+                    # This OP_CODE snippets is no needed, hack these bytes to `NOP`.
+                    current_hack_start = int(m[0])
+                # For other commands just keep them as-is.
             elif flag is _COMMAND_TYPE.FROM:
                 if m := LOAD_ATTR.findall(line):
-                    # 这是 GOTO 后的标签位置
+                    # Here contains the label name.
                     if (label := m[0][1]) not in jump_table:
                         jump_table[label] = _JumpPair(goto_begin=current_jump_start)
                     else:
                         jump_table[label].goto_begin = current_jump_start
-                    byte_array[int(m[0][0])] = opname.index("NOP")
-                    byte_array[int(m[0][0]) + 1] = 0
+                    # Note down the label and hack range information.
+                    hack_table[current_hack_label := label + "_GOTO"] = _JumpPair(goto_begin=current_hack_start)
                 elif m := POP_TOP.findall(line):
                     flag = _COMMAND_TYPE.NORMAL
-                    byte_array[int(m[0])] = opname.index("NOP")
-                    byte_array[int(m[0]) + 1] = 0
+                    # `POP_TOP` takes 2 bytes, hack byte ranges until the next 2 bytes (excluded).
+                    hack_table[current_hack_label].to = int(m[0]) + 2
             elif flag is _COMMAND_TYPE.TO:
                 if m := LOAD_ATTR.findall(line):
-                    # 这是 LABEL 后的标签位置
-                    current_label: str = m[0][1]  # type: ignore[no-redef]
-                    # 其他指令全部变成 NOP
-                    byte_array[int(m[0][0])] = opname.index("NOP")
-                    byte_array[int(m[0][0]) + 1] = 0
+                    # This is the command where label loaded.
+                    current_jump_label: str = m[0][1]  # type: ignore[no-redef]
+                    hack_table[current_hack_label := current_jump_label + "_LABEL"] = _JumpPair(
+                        goto_begin=current_hack_start
+                    )
                 elif m := POP_TOP.findall(line):
                     flag = _COMMAND_TYPE.NORMAL
-                    # 其他指令全部变成 NOP
-                    byte_array[int(m[0])] = opname.index("NOP")
-                    byte_array[int(m[0]) + 1] = 0
-                    # POP_TOP 占2个字节，跳转到它的下一个字节位置上
-                    if current_label not in jump_table:
-                        jump_table[current_label] = _JumpPair(target=int(m[0]))
+                    # `POP_TOP` command only takes 2 bytes, we should jump the command right next to it.
+                    if current_jump_label not in jump_table:
+                        jump_table[current_jump_label] = _JumpPair(target=int(m[0]))
                     else:
-                        jump_table[current_label].to = int(m[0])
+                        jump_table[current_jump_label].to = int(m[0])
+                    hack_table[current_hack_label].to = int(m[0]) + 2
 
-    # 针对跳转表进行处理
+    # Iterate over hack table, fill the byte range with `NOP`
+    for pair in hack_table.values():
+        if pair.goto_begin < 0 or pair.to < 0:
+            raise HackingError("Unable to erase the GOTO and LABEL. Failed to hack T_T")
+        for _ in range(pair.goto_begin, pair.to, 2):
+            byte_array[_] = opname.index("NOP")
+            byte_array[_ + 1] = 0
+    # Iterate over jump table, fixup all JUMP_XXX relationship.
     for pair in jump_table.values():
         if pair.goto_begin < 0 or pair.to < 0:
             raise HackingError("Unsupported structure in source code. Failed to hack T_T")
@@ -88,7 +105,7 @@ def with_goto(func: Callable) -> Callable:
         )
         byte_array[pair.goto_begin + 1] = abs(pair.to - pair.goto_begin) // 2
 
-    # 替换底层指令字节串
+    # Replace code object of the raw function.
     func.__code__ = CodeType(
         c.co_argcount,
         c.co_posonlyargcount,
