@@ -28,36 +28,60 @@ if __name__ == "__main__":
 
 1. Disassemble the raw function.
 2. Iterate over the disassembled contents.
-3. If there's a `LOAD_GLOBAL (GOTO)`, and a `LOAD_ATTR` and a `POP_TOP` right next 2 lines, note down the byte position and the label, it's where we jump from.
-4. Hack both `LOAD_ATTR` and `POP_TOP` to `NOP`.
-5. If there's a `LOAD_GLOBAL (LABEL)`, and a `LOAD_ATTR` and a `POP_TOP` right next 2 lines, note down the byte position the next line of `POP_TOP` and the label, it's where we jump to. Hack all of them 3 to `NOP`.
-6. Iterate over all `(label, from_, to)` pair, check if `from_` is smaller than `to`, to determine the next step behavior.
-7. Hack the `from_` byte (where `LOAD_GLOBAL (GOTO)` located) to `JUMP_FORWARD` or `JUMP_BACKWARD`, depends on the previous step.
+3. If there‘re `LOAD_GLOBAL (GOTO)`, `LOAD_ATTR` and `POP_TOP` in continuing 3 lines, note down the byte position and the label, it's where we jump from.
+4. Hack full byte range of above 3 operations to `NOP`, except the first 2 bytes of `LOAD_GLOBAL`.
+5. If there're `LOAD_GLOBAL (LABEL)`, `LOAD_ATTR` and `POP_TOP` in continuing 3 lines, note down the byte position the next line of `POP_TOP` and the label, it's where we jump to.
+5. Hack full byte range of above 3 operations to `NOP`.
+6. Iterate over all `(label, from_, to)` pair, check if `from_` is smaller than `to`, to determine there should be `JUMP_FORWARD` or `JUMP_BACKWARD`.
+7. Hack the `from_` byte position to `JUMP_FORWARD` or `JUMP_BACKWARD` according to step 7. If `from_` is far away from `to` (jump more than 256 operations), add necessary `EXTENDED_ARG`.
+
+<details><summary>Source code</summary>
+
+```python
+from dis import dis
+
+from goto import GOTO, LABEL, with_goto
+
+
+@with_goto
+def example_01() -> None:
+    print("Hello, ")
+    GOTO.label_01
+    print("Skipped!")
+    LABEL.label_01
+    print("world!")
+
+
+if __name__ == "__main__":
+    dis(example_01)
+```
+
+</details>
 
 <details><summary>Raw disassemble content</summary>
 
 ```text
-  6           0 RESUME                   0
+  7           0 RESUME                   0
 
-  7           2 LOAD_GLOBAL              1 (NULL + print)
+  8           2 LOAD_GLOBAL              1 (NULL + print)
              12 LOAD_CONST               1 ('Hello, ')
              14 CALL                     1
              22 POP_TOP
 
-  8          24 LOAD_GLOBAL              2 (GOTO)
+  9          24 LOAD_GLOBAL              2 (GOTO)
              34 LOAD_ATTR                4 (label_01)
              54 POP_TOP
 
-  9          56 LOAD_GLOBAL              1 (NULL + print)
+ 10          56 LOAD_GLOBAL              1 (NULL + print)
              66 LOAD_CONST               2 ('Skipped!')
              68 CALL                     1
              76 POP_TOP
 
- 10          78 LOAD_GLOBAL              6 (LABEL)
+ 11          78 LOAD_GLOBAL              6 (LABEL)
              88 LOAD_ATTR                4 (label_01)
             108 POP_TOP
 
- 11         110 LOAD_GLOBAL              1 (NULL + print)
+ 12         110 LOAD_GLOBAL              1 (NULL + print)
             120 LOAD_CONST               3 ('world!')
             122 CALL                     1
             130 POP_TOP
@@ -77,20 +101,20 @@ if __name__ == "__main__":
              22 POP_TOP
 
   9          24 JUMP_FORWARD            42 (to 110)
-             26 CACHE
-             28 CACHE
-             30 CACHE
-             32 CACHE
+             26 NOP
+             28 NOP
+             30 NOP
+             32 NOP
              34 NOP
-             36 CACHE
-             38 CACHE
-             40 CACHE
-             42 CACHE
-             44 CACHE
-             46 CACHE
-             48 CACHE
-             50 CACHE
-             52 CACHE
+             36 NOP
+             38 NOP
+             40 NOP
+             42 NOP
+             44 NOP
+             46 NOP
+             48 NOP
+             50 NOP
+             52 NOP
              54 NOP
 
  10          56 LOAD_GLOBAL              1 (NULL + print)
@@ -99,20 +123,20 @@ if __name__ == "__main__":
              76 POP_TOP
 
  11          78 NOP
-             80 CACHE
-             82 CACHE
-             84 CACHE
-             86 CACHE
+             80 NOP
+             82 NOP
+             84 NOP
+             86 NOP
              88 NOP
-             90 CACHE
-             92 CACHE
-             94 CACHE
-             96 CACHE
-             98 CACHE
-            100 CACHE
-            102 CACHE
-            104 CACHE
-            106 CACHE
+             90 NOP
+             92 NOP
+             94 NOP
+             96 NOP
+             98 NOP
+            100 NOP
+            102 NOP
+            104 NOP
+            106 NOP
             108 NOP
 
  12     >>  110 LOAD_GLOBAL              1 (NULL + print)
@@ -126,7 +150,7 @@ if __name__ == "__main__":
 
 ## Limitations
 
-- Jump forward only, you can't goto a label defined before the `GOTO`.
-- Jump out from nested loop (`for` or `while`), but you can't jump into them.
-- You can't jump to somewhere if they are "dead code" (Python intepreter will remove them), such as ...
+- It's able to jump out from nested loop (`for` or `while`), but you can't jump into them.
+- There're 3 `EXTENDED_ARG` operation before other operations at most, means that the jumping gap is no more than 4G. You can't jump such that HUGE distance. (This limitation has no chance to reach for human-written source code)
+- You can't jump to somewhere if they are "dead code" (Python intepreter will remove them directly), such as ...
   - Jump out from a `while True` loop, as the following snippets is unreachable

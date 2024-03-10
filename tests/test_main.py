@@ -1,6 +1,4 @@
-from dis import dis
-
-from pytest import CaptureFixture, mark, raises
+from pytest import CaptureFixture, raises
 from pytest_check import check  # type: ignore[import-untyped]
 
 from goto import GOTO, LABEL, HackingError, with_goto
@@ -88,10 +86,11 @@ def test_05(capsys: CaptureFixture[str]):
         LABEL.label_05
         if k > 5:
             print("Force jump success!")
-            return
+            GOTO.label_06
         print(k)
         k += 1
         GOTO.label_05
+        LABEL.label_06
 
     func()
     out, _ = capsys.readouterr()

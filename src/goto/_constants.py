@@ -33,6 +33,11 @@ GOTO, LABEL = _Placeholder(), _Placeholder()
 
 @dataclass
 class _JumpPair:
+    """Value pair of a jumping relationship.
+
+    It records where a jump operation begins, and where it will jump to.
+    """
+
     def __init__(self, goto_begin: int = -1, target: int = -1) -> None:
         self.goto_begin = goto_begin
         self.to = target
