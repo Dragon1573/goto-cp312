@@ -15,6 +15,12 @@ from ._constants import (
     _JumpPair,
 )
 
+# Convenient constants for OP_CODE
+JUMP_FORWARD = opname.index("JUMP_FORWARD")
+JUMP_BACKWARD = opname.index("JUMP_BACKWARD")
+NOP = opname.index("NOP")
+EXTENDED_ARG = opname.index("EXTENDED_ARG")
+
 
 def with_goto(func: Callable) -> Callable:
     """
@@ -68,7 +74,7 @@ def with_goto(func: Callable) -> Callable:
                     else:
                         jump_table[label].goto_begin = current_jump_start
                     # Note down the label and hack range information.
-                    hack_table[current_hack_label := label + "_GOTO"] = _JumpPair(goto_begin=current_hack_start)
+                    hack_table[current_hack_label := "GOTO." + label] = _JumpPair(goto_begin=current_hack_start)
                 elif m := POP_TOP.findall(line):
                     flag = _COMMAND_TYPE.NORMAL
                     # `POP_TOP` takes 2 bytes, hack byte ranges until the next 2 bytes (excluded).
@@ -77,33 +83,48 @@ def with_goto(func: Callable) -> Callable:
                 if m := LOAD_ATTR.findall(line):
                     # This is the command where label loaded.
                     current_jump_label: str = m[0][1]  # type: ignore[no-redef]
-                    hack_table[current_hack_label := current_jump_label + "_LABEL"] = _JumpPair(
+                    hack_table[current_hack_label := "LABEL." + current_jump_label] = _JumpPair(
                         goto_begin=current_hack_start
                     )
                 elif m := POP_TOP.findall(line):
                     flag = _COMMAND_TYPE.NORMAL
                     # `POP_TOP` command only takes 2 bytes, we should jump the command right next to it.
                     if current_jump_label not in jump_table:
-                        jump_table[current_jump_label] = _JumpPair(target=int(m[0]))
+                        jump_table[current_jump_label] = _JumpPair(target=int(m[0]) + 2)
                     else:
-                        jump_table[current_jump_label].to = int(m[0])
+                        jump_table[current_jump_label].to = int(m[0]) + 2
                     hack_table[current_hack_label].to = int(m[0]) + 2
 
     # Iterate over hack table, fill the byte range with `NOP`
-    for pair in hack_table.values():
+    for name, pair in hack_table.items():
         if pair.goto_begin < 0 or pair.to < 0:
-            raise HackingError("Unable to erase the GOTO and LABEL. Failed to hack T_T")
+            raise HackingError(f"Unable to erase `{name}`. Failed to hack T_T")
         for _ in range(pair.goto_begin, pair.to, 2):
-            byte_array[_] = opname.index("NOP")
+            byte_array[_] = NOP
             byte_array[_ + 1] = 0
     # Iterate over jump table, fixup all JUMP_XXX relationship.
     for pair in jump_table.values():
-        if pair.goto_begin < 0 or pair.to < 0:
-            raise HackingError("Unsupported structure in source code. Failed to hack T_T")
-        byte_array[pair.goto_begin] = (
-            opname.index("JUMP_FORWARD") if pair.goto_begin < pair.to else opname.index("JUMP_BACKWARD")
-        )
-        byte_array[pair.goto_begin + 1] = abs(pair.to - pair.goto_begin) // 2
+        if pair.goto_begin < 0:
+            raise HackingError(f"There are missing `GOTO.{name}`. Failed to hack T_T")
+        if pair.to < 0:
+            raise HackingError(f"There are missing `LABEL.{name}`. Failed to hack T_T")
+        # One byte only supports from 0 to 256, if we want to jump further, there's an EXTENDED_ARG
+        # operation for us.
+        gap, direction = abs(pair.to - pair.goto_begin) // 2, (-1 if pair.goto_begin < pair.to else 1)
+        # Calculate original `EXTENDED_ARG` needed for gap.
+        extend_count = gap.bit_length() // 8 - bool(gap.bit_length() % 8 == 0)
+        # `EXTENDED_ARG` are included in gap, they may change the actual needed count.
+        extend_count = (gap + extend_count).bit_length() // 8 - bool((gap + extend_count).bit_length() % 8 == 0)
+        if extend_count > 3:
+            raise HackingError("Only 3 `EXTENDED_ARG` are allowed in bytecode. You jump too far away!")
+        # Now it's the actual gap we need to jump.
+        gap += extend_count + direction
+        for _ in range(extend_count, 0, -1):
+            byte_array[pair.goto_begin] = EXTENDED_ARG
+            byte_array[pair.goto_begin + 1] = (gap & (0xFF << (_ * 8))) >> (_ * 8)
+            pair.goto_begin += 2
+        byte_array[pair.goto_begin] = JUMP_BACKWARD if direction > 0 else JUMP_FORWARD
+        byte_array[pair.goto_begin + 1] = gap & 0xFF
 
     # Replace code object of the raw function.
     func.__code__ = CodeType(
